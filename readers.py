@@ -174,9 +174,15 @@ async def _call_reader(
     pdf_b64: str,
     semaphore: asyncio.Semaphore,
 ) -> list:
+    """
+    Envoie le PDF à Claude avec un prompt spécifique (le 'reader_name').
+    Utilise un sémaphore pour limiter le nombre d'appels simultanés à l'API.
+    """
     async with semaphore:
         logger.info(f"📖 Lecteur \'{reader_name}\' — envoi au LLM...")
         try:
+            # On exécute l'appel API dans un thread séparé pour ne pas bloquer
+            # la boucle d'événements asynchrone (asyncio).
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
@@ -206,11 +212,16 @@ async def _call_reader(
                 )
             )
 
+            # On nettoie la réponse (enlève le markdown ```json ... ``` si présent)
             raw = _clean_json(response.content[0].text)
+            # On convertit le texte JSON en liste d'objets Python
             items = json.loads(raw)
+            
+            # On s'assure que c'est bien une liste
             if not isinstance(items, list):
                 items = [items]
 
+            # Valeurs par défaut pour chaque exigence trouvée
             for item in items:
                 item.setdefault("source", reader_name)
                 item.setdefault("stakeholder", "")
@@ -229,17 +240,28 @@ async def _call_reader(
 
 
 async def run_all_readers(pdf_path: str) -> dict:
+    """
+    Point d'entrée pour la Phase 1 : lance les 5 lecteurs en parallèle.
+    """
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    
+    # On convertit le PDF en base64 (format requis par l'API Anthropic)
     pdf_b64 = _load_pdf_b64(pdf_path)
     logger.info(f"📄 PDF chargé : {Path(pdf_path).name} ({len(pdf_b64)//1024} KB base64)")
 
+    # Limite à 3 appels API simultanés pour éviter les erreurs de "Rate Limit"
     semaphore = asyncio.Semaphore(3)
     results = {}
     tasks = []
+    
+    # On crée une tâche pour chaque type d'analyse
     for name in _PROMPTS:
         tasks.append(_call_reader(client, name, pdf_b64, semaphore))
     
+    # On lance tout en même temps et on attend que tout soit fini
     responses = await asyncio.gather(*tasks)
+    
+    # On range les résultats par nom de lecteur
     for i, name in enumerate(_PROMPTS):
         results[name] = responses[i]
 

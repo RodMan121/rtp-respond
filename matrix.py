@@ -36,6 +36,11 @@ def _normalize(text: str) -> str:
 
 
 def _deduplicate(items: list) -> list:
+    """
+    Supprime les exigences en double trouvées par les différents lecteurs.
+    On se base sur la citation source et sur le début du texte de l'exigence.
+    """
+    # On trie pour garder en priorité les sources les plus fiables (explicites)
     items_sorted = sorted(
         items,
         key=lambda x: _SOURCE_PRIORITY.get(x.get("source", "predictive"), 3)
@@ -44,11 +49,14 @@ def _deduplicate(items: list) -> list:
     seen_prefix = {}
     unique = []
     for item in items_sorted:
+        # Vérification par citation verbatim
         quote = _normalize(item.get("source_quote", ""))
         if quote and len(quote) > 20:
             if quote in seen_quotes:
-                continue
+                continue # Déjà vu
             seen_quotes[quote] = True
+            
+        # Vérification par début de phrase (pour les reformulations)
         prefix = _normalize(item.get("text", ""))[:80]
         if len(prefix) < 15:
             continue
@@ -71,9 +79,13 @@ def _assign_ids(items: list) -> list:
 
 
 def merge(readings: dict) -> list:
+    """
+    Combine les résultats des 5 lecteurs en une seule liste propre.
+    """
     all_items = []
     for reader_name, items in readings.items():
         for item in items:
+            # S'assure que chaque item a toutes les clés nécessaires
             item.setdefault("type", "functional")
             item.setdefault("moscow", "should")
             item.setdefault("source", reader_name)
@@ -82,12 +94,19 @@ def merge(readings: dict) -> list:
             item.setdefault("stakeholder", "")
             item.setdefault("text", "")
             all_items.append(item)
+            
+    # Nettoyage des doublons
     unique = _deduplicate(all_items)
+    
+    # Tri par importance (Must en premier) puis par type
     unique.sort(key=lambda x: (
         _MOSCOW_ORDER.get(x.get("moscow", "should"), 1),
         x.get("type", "functional"),
     ))
+    
+    # Attribution d'un ID unique (ex: F-001, NF-SEC-005)
     unique = _assign_ids(unique)
+    
     logger.success(
         f"✅ Matrice finale : {len(unique)} exigences "
         f"({sum(1 for x in unique if x[\'moscow\']==\'must\')} Must | "
@@ -108,7 +127,12 @@ _RESPONSE_PROMPT = (
 
 
 async def enrich_with_responses(matrix: list) -> list:
+    """
+    Phase 3 : demande à l'IA de rédiger une proposition de réponse
+    pour chaque ligne de la matrice. Traitement par lots (batches).
+    """
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    # On envoie 30 exigences à la fois pour optimiser les performances
     BATCH = 30
     batches = [matrix[i:i+BATCH] for i in range(0, len(matrix), BATCH)]
     id_to_response = {}
@@ -122,6 +146,7 @@ async def enrich_with_responses(matrix: list) -> list:
 
     for i, batch in enumerate(batches):
         logger.info(f"✍️  Réponses — lot {i+1}/{len(batches)}")
+        # On ne garde que les infos utiles pour le prompt
         batch_input = [{"id": x["id"], "text": x["text"], "type": x["type"]} for x in batch]
         prompt = _RESPONSE_PROMPT.format(
             requirements_json=json.dumps(batch_input, ensure_ascii=False)
@@ -136,11 +161,13 @@ async def enrich_with_responses(matrix: list) -> list:
                     messages=[{"role": "user", "content": p}],
                 )
             )
+            # Récupération des réponses JSON de l'IA
             for r in json.loads(_clean(response.content[0].text)):
                 id_to_response[r["id"]] = r.get("response", "")
         except Exception as e:
             logger.error(f"❌ Erreur lot {i+1} : {e}")
 
+    # Injection des réponses dans la matrice originale
     for item in matrix:
         item["proposed_response"] = id_to_response.get(item["id"], "")
 
