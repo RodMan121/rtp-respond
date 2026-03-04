@@ -9,7 +9,7 @@ import asyncio
 import anthropic
 from loguru import logger
 
-MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-5")
+MODEL = os.getenv("CLAUDE_MODEL", "claude-3-5-haiku-20241022")
 
 _TYPE_PREFIX = {
     "functional":  "F",

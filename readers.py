@@ -12,7 +12,7 @@ import anthropic
 from pathlib import Path
 from loguru import logger
 
-MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-5")
+MODEL = os.getenv("CLAUDE_MODEL", "claude-3-5-haiku-20241022")
 
 _SYSTEM = (
     "Tu es un expert en analyse de cahiers des charges (RFP/CCTP). "
